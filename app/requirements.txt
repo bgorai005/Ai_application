@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+# torch is provided by the PyTorch base image for the model server; keep app deps minimal
+pandas
+numpy
+joblib
+prometheus_fastapi_instrumentator
+requests
+
+# Required to load persisted sklearn scalers (used by the model pipeline)
+scikit-learn
+
+# NOTE: heavy dev/visualization packages such as `scikit-learn` and `plotly`
+# are intentionally excluded here to keep the model server image small and
+# fast to build. Install them only in the training/dev image or the
+# Streamlit UI image (root `requirements.txt`).

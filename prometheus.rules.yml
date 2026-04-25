@@ -1,0 +1,21 @@
+groups:
+  - name: mlops-alerts
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_server_requests_total{status=~"5.."}[5m])) / sum(rate(http_server_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High 5xx error rate (>5%)"
+          description: "More than 5% of requests are failing with 5xx across the monitored services in the last 5 minutes."
+
+      - alert: DataDriftDetected
+        expr: drift_detected > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Data drift detected"
+          description: "Drift detector reported data drift (drift_detected=1). Investigate input distribution changes and consider retraining."

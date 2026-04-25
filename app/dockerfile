@@ -1,0 +1,28 @@
+# app/Dockerfile
+FROM python:3.10-slim
+
+# Build argument to control whether torch is installed in this image.
+# We avoid downloading torch for the gateway (backend_app) to speed up builds
+# and install torch only in the dedicated model_server image.
+ARG INSTALL_TORCH=true
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+# Install common requirements first
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install torch (CPU wheel) only when requested to avoid long downloads for gateway builds.
+RUN if [ "${INSTALL_TORCH}" = "true" ]; then \
+			pip install --no-cache-dir --upgrade pip && \
+			pip install --no-cache-dir "torch==2.2.0+cpu" -f https://download.pytorch.org/whl/cpu/torch_stable.html ; \
+		else \
+			echo "Skipping torch installation (INSTALL_TORCH=${INSTALL_TORCH})"; \
+		fi
+
+COPY . ./app
+
+EXPOSE 8000
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

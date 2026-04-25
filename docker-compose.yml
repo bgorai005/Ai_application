@@ -1,0 +1,183 @@
+services:
+  trainer:
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: dockerfile
+      target: trainer
+    container_name: trainer
+    environment:
+      - RUN_TRAINING=${RUN_TRAINING:-false}
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        set -e
+        if [ "${RUN_TRAINING:-false}" != "true" ]; then
+          echo "RUN_TRAINING is not true; skipping data pipeline and training."
+          exit 0
+        fi
+
+        python - <<'PY'
+        import socket
+        import time
+
+        deadline = time.time() + 900
+        while time.time() < deadline:
+            try:
+                socket.create_connection(("mlflow", 5000), timeout=3).close()
+                print("MLflow is reachable.")
+                break
+            except OSError:
+                print("Waiting for MLflow...")
+                time.sleep(5)
+        else:
+            raise SystemExit("MLflow did not become ready in time.")
+        PY
+        cp ml_pipeline/config.ini ./config.ini
+        python data_pipeline/pipeline.py
+        python ml_pipeline/train.py
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./drift_detection:/app/drift_detection
+      - ./ml_pipeline:/app/ml_pipeline
+      - ./data_pipeline:/app/data_pipeline
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    restart: "no"
+
+  backend_app:
+    build:
+      context: ./app
+      dockerfile: dockerfile
+      args:
+        INSTALL_TORCH: "false"
+    container_name: backend_app
+    ports:
+      - "8000:8000"
+    environment:
+      - MODEL_SERVER_URL=http://model_server:8500
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5).read()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - ./models/:/app/models/
+      - ./ml_pipeline/:/app/ml_pipeline/
+      - ./data/:/app/data/
+    depends_on:
+      model_server:
+        condition: service_started
+    restart: always
+
+  streamlit_app:
+    build:
+      context: .
+      dockerfile: dockerfile
+      target: streamlit
+    container_name: streamlit_app
+    ports:
+      - "8501:8501"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=5).read()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    depends_on:
+      backend_app:
+        condition: service_started
+    restart: always
+
+
+
+  metrics_exporter:
+    build: ./system-metric-exporter
+    container_name: metrics_exporter
+    restart: always
+    ports:
+      - "18000:18000"
+    volumes:
+      - /proc:/host_proc:ro
+      - /dev:/host_dev:ro
+    environment:
+      - PROC_PATH=/host_proc
+    privileged: true
+    
+    
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-storage:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/etc/grafana/dashboards
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=secret
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    restart: unless-stopped
+
+  model_server:
+    platform: linux/amd64
+    build:
+      context: ./app
+      dockerfile: Dockerfile.model_server
+    container_name: model_server
+    ports:
+      - "8500:8500"
+    command: ["uvicorn", "app.model_server:app", "--host", "0.0.0.0", "--port", "8500"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8500/health', timeout=5).read()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - ./models/:/app/models/
+      - ./ml_pipeline/:/app/ml_pipeline/
+      - ./data/:/app/data/
+    depends_on:
+      trainer:
+        condition: service_completed_successfully
+    restart: always
+
+  mlflow:
+    build:
+      context: .
+      dockerfile: dockerfile
+      target: mlflow
+    container_name: mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlruns:/mlruns
+      - ./mlflow.db:/mlflow
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000', timeout=5).read()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+
+volumes:
+  grafana-storage:

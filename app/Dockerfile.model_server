@@ -1,0 +1,18 @@
+FROM pytorch/pytorch:latest
+
+WORKDIR /app
+
+# Install Python dependencies (torch is already included in the base image)
+COPY requirements.txt .
+# Prefer binary wheels where available to avoid building from source and
+# speed up installs. Keep no-cache to keep image small.
+RUN pip install --no-cache-dir --upgrade pip && \
+	pip install --no-cache-dir --prefer-binary -r requirements.txt
+
+# Copy application
+COPY . ./app
+
+EXPOSE 8500
+
+# Start the model server FastAPI app
+CMD ["uvicorn", "app.model_server:app", "--host", "0.0.0.0", "--port", "8500"]

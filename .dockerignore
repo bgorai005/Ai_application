@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.swp
+.Python
+.env
+.git
+.dvc
+data/
+model/
+ml_pipeline/

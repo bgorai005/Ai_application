@@ -1,0 +1,11 @@
+# files 
+.dvc
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite
+*.log
+.lock
+.txt
+.codex

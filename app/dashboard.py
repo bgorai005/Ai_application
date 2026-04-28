@@ -151,9 +151,10 @@ def get_current_signal():
 
 
 @router.get("/signal/history", response_model=SignalHistoryResponse)
-def get_signal_history(limit: int = 30):
+def get_signal_history(limit: int = 30, n: int | None = None):
     entries = load_predictions()
-    return {"history": entries[-limit:]}
+    history_limit = n if n is not None else limit
+    return {"history": entries[-history_limit:]}
 
 
 @router.get("/signal/context", response_model=ContextResponse)
@@ -208,22 +209,41 @@ def compute_accuracy(entries: List[dict], window: int):
     return round(correct / total * 100, 2)
 
 
-@router.get("/model/metrics", response_model=MetricsResponse)
-def get_model_metrics():
+def build_metrics_payload():
     entries = load_predictions()
     accuracy_7 = compute_accuracy(entries, 7)
     accuracy_30 = compute_accuracy(entries, 30)
     accuracy_60 = compute_accuracy(entries, 60)
+
     spark = []
+    correct_series = []
     for e in entries[-30:]:
-        o = e.get("outcome")
-        if o == "Correct":
-            spark.append(1)
-        elif o == "Incorrect":
-            spark.append(0)
-        else:
-            spark.append(0)
-    return {"accuracy_7": accuracy_7, "accuracy_30": accuracy_30, "accuracy_60": accuracy_60, "sparkline": spark}
+        outcome = e.get("outcome")
+        is_correct = outcome == "Correct"
+        correct_series.append(is_correct)
+        spark.append(1 if is_correct else 0)
+
+    return {
+        "accuracy_7": accuracy_7,
+        "accuracy_30": accuracy_30,
+        "accuracy_60": accuracy_60,
+        "sparkline": spark,
+        # Compatibility fields for the current Streamlit dashboard
+        "last_7": accuracy_7,
+        "last_30": accuracy_30,
+        "last_60": accuracy_60,
+        "correct_series": correct_series,
+    }
+
+
+@router.get("/signal/accuracy", response_model=MetricsResponse)
+def get_signal_accuracy():
+    return build_metrics_payload()
+
+
+@router.get("/model/metrics", response_model=MetricsResponse)
+def get_model_metrics():
+    return build_metrics_payload()
 
 
 @router.post("/feedback", response_model=FeedbackResponse)

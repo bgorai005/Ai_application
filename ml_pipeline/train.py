@@ -378,6 +378,7 @@ with mlflow.start_run() as run:
     best_rmse = float("inf")
     best_save_epoch = 0
     best_model_updated = False
+    best_model_path = os.path.join("models", "best_model.pth")
 
     model_dir = "./models"
     if not os.path.exists(model_dir):
@@ -409,7 +410,7 @@ with mlflow.start_run() as run:
                 best_mape = mape
                 # Save best model manually
 
-                torch.save(model.state_dict(), "models/best_model.pth")
+                torch.save(model.state_dict(), best_model_path)
                 best_model_updated = True
 
             log_pytorch_model_if_available(model, "latest_model")
@@ -424,8 +425,23 @@ with mlflow.start_run() as run:
             break
 
     if best_model_updated:
-        # Log the best model to MLflow using the safer format and attempt
-        # to register it in the MLflow Model Registry.
+        # Reload the exact best checkpoint so the artifact and registry entry
+        # correspond to the saved best weights, not just the final epoch state.
+        try:
+            best_state_dict = torch.load(best_model_path, map_location=device)
+            model.load_state_dict(best_state_dict)
+            model.eval()
+        except Exception as e:
+            logging.warning(f"Could not reload best model checkpoint before logging: {e}")
+
+        # Log the raw checkpoint artifact so it is always visible in MLflow.
+        try:
+            if os.path.exists(best_model_path):
+                mlflow.log_artifact(best_model_path, artifact_path="checkpoints")
+        except Exception as e:
+            logging.warning(f"Failed to log best model checkpoint to MLflow: {e}")
+
+        # Log the best model as an MLflow model artifact and attempt to register it.
         log_pytorch_model_if_available(model, "best_model")
         try:
             from mlflow.tracking import MlflowClient

@@ -58,6 +58,11 @@ class MetricsResponse(BaseModel):
     accuracy_30: Optional[float] = None
     accuracy_60: Optional[float] = None
     sparkline: List[int] = []
+    # Backward-compatible aliases used by the Streamlit UI
+    last_7: Optional[float] = None
+    last_30: Optional[float] = None
+    last_60: Optional[float] = None
+    correct_series: List[bool] = []
 
 
 class FeedbackRequest(BaseModel):

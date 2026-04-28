@@ -1,6 +1,6 @@
 import streamlit as st
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+from datetime import datetime
 import pandas as pd
 import requests
 import os
@@ -56,8 +56,8 @@ st.markdown(f"""
   }}
   .navbar-logo {{
     font-family: 'IBM Plex Mono', monospace;
-    font-size: 18px; font-weight: 600; color: {TEXT_PRIMARY};
-    letter-spacing: 0.04em;
+    font-size: 26px; font-weight: 700; color: {TEXT_PRIMARY};
+    letter-spacing: 0.05em;
   }}
   .navbar-logo span {{ color: {COLOR_BUY}; }}
   .navbar-right {{ display: flex; align-items: center; gap: 24px; }}
@@ -156,17 +156,18 @@ st.markdown(f"""
   }}
 
   /* ── Context table ───────────────────────────────────────────────── */
-  .ctx-table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+  .ctx-table {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
   .ctx-table th {{
     font-size: 10px; font-weight: 600; letter-spacing: 0.1em;
-    color: {TEXT_MUTED}; text-align: right; padding: 6px 10px;
+    color: {TEXT_MUTED}; text-align: right; padding: 4px 8px;
     border-bottom: 1px solid {BORDER}; text-transform: uppercase;
   }}
   .ctx-table th:first-child {{ text-align: left; }}
   .ctx-table td {{
-    padding: 6px 10px; text-align: right;
-    font-family: 'IBM Plex Mono', monospace; font-size: 12px;
-    border-bottom: 1px solid rgba(48,54,61,0.5);
+    padding: 3px 8px; text-align: right;
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+    border-bottom: 1px solid rgba(48,54,61,0.4);
+    line-height: 1.4;
   }}
   .ctx-table td:first-child {{ text-align: left; color: {TEXT_MUTED}; }}
   .ctx-table tr:nth-child(even) td {{ background: rgba(255,255,255,0.015); }}
@@ -275,7 +276,7 @@ def fetch_context(length=20):
 
 def fetch_history(n=30):
     try:
-        r = requests.get(f"{SIGNAL_BASE}/signal/history?n={n}", timeout=5)
+        r = requests.get(f"{SIGNAL_BASE}/signal/history?limit={n}", timeout=5)
         r.raise_for_status()
         return r.json().get("history", [])
     except Exception:
@@ -302,8 +303,22 @@ def fetch_model_health():
 
 def last_n_candles(df: pd.DataFrame, selected_date, n=20):
     df = df.copy()
-    df["Datetime"] = pd.to_datetime(df["Datetime"])
-    window = df[df["Datetime"].dt.date <= selected_date]
+    df["Datetime"] = pd.to_datetime(df["Datetime"], errors="coerce")
+    df = df.dropna(subset=["Datetime"])
+    # Normalize selected_date to a date object regardless of type
+    if hasattr(selected_date, "date"):
+        sel = selected_date.date()
+    else:
+        sel = pd.Timestamp(selected_date).date()
+    day_rows = df[df["Datetime"].dt.date == sel]
+    if not day_rows.empty:
+        return day_rows
+
+    # Fallback: if the exact day is not present, keep the old behavior so the
+    # chart still has data instead of going blank.
+    window = df[df["Datetime"].dt.date <= sel]
+    if window.empty:
+        return df.tail(n)
     return window.tail(n)
 
 
@@ -325,9 +340,18 @@ def signal_color(sig):
 
 
 def acc_color(pct):
+    if pct is None:
+        return COLOR_HOLD
     if pct >= 60: return COLOR_BUY
     if pct >= 50: return COLOR_WARN
     return COLOR_SELL
+
+
+def first_present(*values):
+    for value in values:
+        if value is not None:
+            return value
+    return None
 
 
 def badge_html(text, style="grey"):
@@ -349,7 +373,7 @@ def outcome_badge(outcome):
     return badge_html("Pending", "grey")
 
 
-def plot_price_chart(candles: pd.DataFrame, pred_highs: list, pred_lows: list):
+def plot_price_chart(candles: pd.DataFrame):
     if candles.empty:
         return None
 
@@ -361,41 +385,11 @@ def plot_price_chart(candles: pd.DataFrame, pred_highs: list, pred_lows: list):
         low=candles["Low"],
         close=candles["Close"],
         name="Price",
-        increasing_line_color=COLOR_BUY,
-        decreasing_line_color=COLOR_SELL,
-        increasing_fillcolor=COLOR_BUY,
-        decreasing_fillcolor=COLOR_SELL,
+        increasing=dict(line=dict(color=COLOR_BUY, width=2)),
+        decreasing=dict(line=dict(color=COLOR_SELL, width=2)),
+        whiskerwidth=0.7,
+        opacity=0.95,
     ))
-
-    # time delta
-    if len(candles) >= 2:
-        delta_secs = int(candles["Datetime"].diff().dt.total_seconds().median())
-        if pd.isna(delta_secs) or delta_secs <= 0:
-            delta_secs = 300
-    else:
-        delta_secs = 300
-
-    last_dt = pd.to_datetime(candles["Datetime"].iloc[-1])
-    n_fut   = min(len(pred_highs), len(pred_lows))
-    future  = [last_dt + timedelta(seconds=delta_secs * (i + 1)) for i in range(n_fut)]
-
-    if future:
-        fig.add_trace(go.Scatter(
-            x=future, y=pred_highs, mode="lines", name="Pred High",
-            line=dict(color=COLOR_BUY, dash="dash", width=1.5),
-        ))
-        fig.add_trace(go.Scatter(
-            x=future, y=pred_lows, mode="lines", name="Pred Low",
-            line=dict(color=COLOR_SELL, dash="dash", width=1.5),
-            fill="tonexty",
-            fillcolor="rgba(0,200,150,0.08)",
-        ))
-        # band for T+1
-        bx0 = future[0]
-        bx1 = future[0] + timedelta(seconds=delta_secs * 0.85)
-        fig.add_shape(type="rect", xref="x", yref="y",
-                      x0=bx0, x1=bx1, y0=pred_lows[0], y1=pred_highs[0],
-                      fillcolor="rgba(0,200,150,0.10)", line_width=0, layer="below")
 
     fig.update_layout(
         template="plotly_dark",
@@ -404,8 +398,16 @@ def plot_price_chart(candles: pd.DataFrame, pred_highs: list, pred_lows: list):
         margin=dict(l=8, r=8, t=8, b=8),
         legend=dict(orientation="h", y=-0.12, font=dict(size=11, color=TEXT_MUTED)),
         xaxis_rangeslider_visible=False,
+        xaxis=dict(type="date"),
     )
-    fig.update_xaxes(showgrid=False, color=TEXT_MUTED)
+    fig.update_xaxes(
+        showgrid=False,
+        color=TEXT_MUTED,
+        rangebreaks=[
+            dict(bounds=["sat", "mon"]),
+            dict(bounds=[15.5, 9.25], pattern="hour"),
+        ],
+    )
     fig.update_yaxes(showgrid=True, gridcolor=BORDER, gridwidth=1, color=TEXT_MUTED,
                      tickfont=dict(family="IBM Plex Mono"))
     return fig
@@ -464,7 +466,34 @@ p_high  = signal.get("predicted_high", "—")     if signal else "—"
 p_low   = signal.get("predicted_low",  "—")     if signal else "—"
 p_highs = signal.get("predicted_highs",[])       if signal else []
 p_lows  = signal.get("predicted_lows", [])       if signal else []
-
+# ════════════════════════════════════════════════════════════════════════════════
+# DEMO MODE WARNING - Critical safety feature
+# ════════════════════════════════════════════════════════════════════════════════
+if not signal:  # Backend returned None = service unavailable
+    st.markdown(f"""
+    <div style="background: rgba(245,158,11,0.15); 
+                border: 2px solid {COLOR_WARN}; 
+                border-radius: 12px; 
+                padding: 24px; 
+                margin: 24px 32px;
+                border-left: 6px solid {COLOR_WARN};">
+      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+        <span style="font-size: 32px;">⚠️</span>
+        <span style="font-size: 20px; font-weight: 700; color: {COLOR_WARN};">
+          BACKEND UNAVAILABLE - DEMO MODE
+        </span>
+      </div>
+      <p style="margin: 8px 0; font-size: 14px; color: {TEXT_PRIMARY};">
+        <strong>DO NOT TRADE BASED ON THIS SIGNAL.</strong><br>
+        The backend prediction service is currently unreachable. 
+        All signals, predictions, and accuracy metrics shown below are 
+        <strong>randomly generated placeholder data</strong> for demonstration purposes only.
+      </p>
+      <p style="margin: 8px 0 0 0; font-size: 12px; color: {TEXT_MUTED};">
+        Please check your backend service at <code>{SIGNAL_BASE}</code> or contact support.
+      </p>
+    </div>
+    """, unsafe_allow_html=True)
 sig_color = signal_color(sig)
 
 # Should we pulse? (signal within last 5 min)
@@ -570,22 +599,27 @@ default_date    = pd.Timestamp.now().date()
 if default_date not in available_dates:
     default_date = available_dates[0]
 
+# Date selector above columns so selected_date + candles are in scope for all rows
+_date_col, _ = st.columns([3, 9])
+with _date_col:
+    selected_date = st.date_input(
+        "Chart date:", value=default_date,
+        min_value=min(available_dates), max_value=max(available_dates),
+    )
+
+# Hoist candles computation so Row 3 context table can use it as fallback too
+candles = last_n_candles(df, selected_date, n=20)
+
 col_chart, col_feat = st.columns([6, 4], gap="large")
 
 with col_chart:
     st.markdown('<div class="section-label">Price Range Chart</div>', unsafe_allow_html=True)
-    selected_date = st.date_input(
-        "Chart date:", value=default_date,
-        min_value=min(available_dates), max_value=max(available_dates),
-        label_visibility="collapsed",
-    )
-    candles = last_n_candles(df, selected_date, n=20)
     if candles.empty:
-        st.warning("No data for selected date.")
+        st.warning("No OHLCV data found for the selected date range.")
     else:
-        fig = plot_price_chart(candles, p_highs if p_highs else [], p_lows if p_lows else [])
+        fig = plot_price_chart(candles)
         if fig:
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
 with col_feat:
     st.markdown('<div class="section-label">Feature Snapshot</div>', unsafe_allow_html=True)
@@ -778,26 +812,30 @@ col_acc, col_health, col_fb = st.columns([4, 4, 4], gap="large")
 # ── Accuracy Tracker ──────────────────────────────────────────────────────────
 with col_acc:
     st.markdown('<div class="section-label">Accuracy Tracker</div>', unsafe_allow_html=True)
-    acc_7  = accuracy.get("last_7",  random.randint(55, 80))
-    acc_30 = accuracy.get("last_30", random.randint(50, 75))
-    acc_60 = accuracy.get("last_60", random.randint(48, 72))
+    acc_7  = first_present(accuracy.get("last_7"), accuracy.get("accuracy_7"), random.randint(55, 80))
+    acc_30 = first_present(accuracy.get("last_30"), accuracy.get("accuracy_30"), random.randint(50, 75))
+    acc_60 = first_present(accuracy.get("last_60"), accuracy.get("accuracy_60"), random.randint(48, 72))
 
     for label, pct in [("Last 7 signals", acc_7), ("Last 30 signals", acc_30), ("Last 60 signals", acc_60)]:
+        display_pct = pct if pct is not None else 0
         c = acc_color(pct)
         st.markdown(f"""
         <div class="acc-card">
           <div class="acc-label">{label}</div>
-          <div class="acc-val" style="color:{c};">{pct}%</div>
+          <div class="acc-val" style="color:{c};">{display_pct}%</div>
           <div class="progress-bar-wrap">
-            <div class="progress-bar" style="width:{pct}%; background:{c};"></div>
+            <div class="progress-bar" style="width:{display_pct}%; background:{c};"></div>
           </div>
         </div>""", unsafe_allow_html=True)
 
     # Sparkline
-    spark_data = accuracy.get("correct_series", [random.choice([True, False]) for _ in range(30)])
-    st.markdown('<div style="margin-top:8px; font-size:11px; color:{TEXT_MUTED};">Correct / Incorrect — last 30</div>', unsafe_allow_html=True)
+    spark_data = accuracy.get("correct_series", accuracy.get("sparkline", [random.choice([True, False]) for _ in range(30)]))
+    st.markdown(
+        f'<div style="margin-top:8px; font-size:11px; color:{TEXT_MUTED};">Correct / Incorrect — last 30</div>',
+        unsafe_allow_html=True,
+    )
     sfig = sparkline_fig(spark_data)
-    st.plotly_chart(sfig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(sfig, width="stretch", config={"displayModeBar": False})
 
 
 # ── Model Health ──────────────────────────────────────────────────────────────
@@ -859,7 +897,7 @@ with col_fb:
             st.write("How accurate was this signal?")
             rating_val = st.feedback("stars", key="star_fb")
             comment    = st.text_input("Any comments? (optional)", placeholder="Optional notes…", label_visibility="collapsed")
-            if st.button("Send Feedback", type="primary", use_container_width=True):
+            if st.button("Send Feedback", type="primary", width="stretch"):
                 r = (rating_val + 1) if rating_val is not None else 0
                 submit_feedback(r, comment)
                 st.rerun()

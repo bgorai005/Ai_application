@@ -9,3 +9,6 @@
 .lock
 .txt
 .codex
+./models/
+./data/
+./drift_detection/
